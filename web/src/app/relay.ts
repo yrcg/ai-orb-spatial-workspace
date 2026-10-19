@@ -4,7 +4,7 @@ import {
 import type { AIOrbChat } from '../orb';
 import { AudioReactive } from '../orb';
 import { CONFIG } from './config';
-import { QWEN_TOOLS, TOOL_LABEL, SLOW_TOOLS, runToolOnce } from './tools';
+import { QWEN_TOOLS, TOOL_LABEL, SLOW_TOOLS, runToolOnce, kbChart, shouldRequestChart, isChartRequested } from './tools';
 import { extractChartBlocks, type ChartBlock } from '../spatial/chartMarkdown';
 import { Sounds, type SoundBus } from './sounds';
 
@@ -166,6 +166,10 @@ export class RelayClient {
   #statusEpoch = 0;
   /** 文字链路是否正在等一轮回答（打断按钮据此判断） */
   #textBusy = false;
+  /** 旁路图表：每轮一个 AbortController，新轮次开始时取消旧请求 */
+  #chartAbort: AbortController | null = null;
+  /** 旁路图表的轮次号：晚到的旧结果不许覆盖新一轮 */
+  #chartEpoch = 0;
   /** 文字提问串行队列 */
   #textChain: Promise<void> = Promise.resolve();
   /** 文字 WS 是否已发过 session.update（每条连接只配置一次） */
@@ -280,6 +284,7 @@ export class RelayClient {
   }
 
   stopVoice(): void {
+    this.#cancelSideChart();
     const hadCall = !!this.#ws;
     this.#epoch++;
     this.#manualStop = true;
@@ -644,6 +649,50 @@ export class RelayClient {
   // ───────────────────────── 工具 ─────────────────────────
 
   /**
+   * 旁路图表：只发一次「要图表」的知识库请求，与正文并行。
+   *
+   * 三条硬约束：
+   * 1. 不阻塞正文——它和 runToolOnce 同时发出，谁先回来都不影响开口；
+   * 2. 不重复叠加——新轮次会 abort 上一次，晚到的结果按 epoch 丢弃；
+   * 3. 不为了展示而展示——问题本身不像有数据时，这次请求根本不发。
+   */
+  #requestSideChart(question: string): void {
+    if (!isChartRequested()) return;
+    if (!shouldRequestChart(question)) {
+      this.log('chart_skip', { q: question.slice(0, 60) });
+      return;
+    }
+    this.#chartAbort?.abort();
+    const abort = new AbortController();
+    this.#chartAbort = abort;
+    const epoch = ++this.#chartEpoch;
+    const t0 = performance.now();
+    this.log('chart_request', { q: question.slice(0, 60) });
+
+    void kbChart(question, 22, abort.signal).then((res) => {
+      if (abort.signal.aborted || epoch !== this.#chartEpoch) return;
+      const ms = Math.round(performance.now() - t0);
+      const parsed = extractChartBlocks(String(res.answer || ''));
+      if (!parsed.charts.length) {
+        this.log('chart_ready', { ok: false, ms, reason: 'no_chart_block' });
+        return;
+      }
+      this.log('chart_ready', { ok: true, ms, count: parsed.charts.length });
+      this.#emitVisuals(parsed.charts, 'side');
+    }).catch((e) => {
+      if (abort.signal.aborted) return;
+      this.log('chart_ready', { ok: false, ms: Math.round(performance.now() - t0), err: String((e as Error)?.message || e) });
+    });
+  }
+
+  /** 取消进行中的旁路图表请求（挂断 / 新一轮 / 用户打断时） */
+  #cancelSideChart(): void {
+    this.#chartEpoch++;
+    this.#chartAbort?.abort();
+    this.#chartAbort = null;
+  }
+
+  /**
    * 把捕获到的图表交给空间舞台。
    * 走 DOM 事件而不是直接 import 舞台：relay 不认识 spatial，
    * 关闭空间工作区时这条事件也没人监听，语音链路完全不受影响。
@@ -673,6 +722,9 @@ export class RelayClient {
     if (this.#curAsstOpen) this.#endBot(false);       // 工具前的空档 → 封口当前气泡
 
     fc.toolsInFlight++;
+    // 旁路图表在**正文工具调用开始的同时**发出，而不是等正文回来再发。
+    // 知识库单次要 10 秒级，串行发的话图会在回答讲完之后很久才到，失去意义。
+    if (name === 'query_company_policy') this.#requestSideChart(String(args.topic || ''));
     let out = '';
     let ok = true;
     try {
@@ -693,7 +745,7 @@ export class RelayClient {
     const parsed = extractChartBlocks(out);
     if (parsed.charts.length) this.#emitVisuals(parsed.charts, name);
     const payload = parsed.text
-      || '（数据图表已展示在界面上，请用一两句话概括结论。）';
+      || '（数据已整理好，请用一两句话概括结论。）';
 
     if (!ws || ws.readyState !== 1) return;
     // 工具结果可以立刻回灌（conversation.item.create 不受"生成中"限制），
