@@ -1,0 +1,34 @@
+# 语音桌宠 Demo · 一键部署
+#   docker compose up -d --build
+#   本机:   http://127.0.0.1:8770
+#   局域网: https://192.168.5.91:8772   ← 语音对话走这个（https 才给麦克风）
+#
+# 密钥从宿主机的 .env 注入（DASHSCOPE_API_KEY），不打包进镜像。
+services:
+  pet:
+    build: .
+    image: minicpm-demo:latest
+    container_name: minicpm-demo
+    ports:
+      # ⚠ HTTP 端口必须是 8770：前端只在端口为 8770（或页面为 https）时才与服务同源
+      - "8770:8770"
+      # HTTPS 端口：局域网访问用，可改宿主端口（改完前端无需改动，见 public/index.html 的 RELAY_SECURE）
+      - "8772:8772"
+    env_file:
+      - .env
+    environment:
+      # .env 里已有同名值时以下默认值不生效；没有时给兜底
+      PET_MODEL: ${PET_MODEL:-qwen-audio-3.1-realtime-plus}
+      # 公司知识库（可选）：连不上不影响语音对话，模型会答"暂时查不到"
+      # ⚠ API 端口是 13000（80 是 nginx 前端）；旧值 192.168.5.91:3001 已失效
+      PET_KB_BASE: ${PET_KB_BASE:-http://192.168.5.196:13000}
+      PET_KB_USER: ${PET_KB_USER:-17427833417981666}
+      PET_KB_TIMEOUT: ${PET_KB_TIMEOUT:-30}
+      # 容器内自签证书的额外 SAN（宿主机局域网 IP）——容器探测不到宿主机 IP，需手动给
+      PET_TLS_EXTRA_SAN: ${PET_TLS_EXTRA_SAN:-192.168.5.91}
+    volumes:
+      # 日志持久化到宿主机 ./logs（容器内写 /app/logs）
+      - ./logs:/app/logs
+      # 证书持久化到宿主机 ./certs（含宿主机局域网 IP 的 SAN；没有则容器内自动生成）
+      - ./certs:/app/certs
+    restart: unless-stopped

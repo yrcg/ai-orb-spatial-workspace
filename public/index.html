@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>瀚涛百事通 · 全双工语音桌宠</title>
+    <style>
+      /* ─────────────────────────────────────────────────────────────
+         这一页只是「宿主管理界面」的模拟：用来验证悬浮球能否无缝融进
+         一个白底、信息密集的后台。真实集成时这一整块由宿主页面提供。
+         ───────────────────────────────────────────────────────────── */
+      :root {
+        --ink: #1b2733;
+        --ink-dim: #64748b;
+        --ink-faint: #94a3b8;
+        --line: #e5eaf1;
+        --bg: #f6f8fb;
+        --card: #ffffff;
+        --accent: #2f6fd0;
+        --accent-soft: #eef4fd;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      body {
+        font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        user-select: none;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .app { display: grid; grid-template-columns: 224px 1fr; height: 100%; }
+
+      /* 侧栏 */
+      .side {
+        background: var(--card);
+        border-right: 1px solid var(--line);
+        padding: 20px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .brand { display: flex; align-items: center; gap: 9px; padding: 0 8px 22px; }
+      .brand .mark {
+        width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto;
+        background: linear-gradient(140deg, #3f7fe0, #6aa8f2);
+      }
+      .brand b { font-size: 13.5px; font-weight: 600; letter-spacing: 0.02em; }
+      .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 10px; border-radius: 8px;
+        font-size: 13px; color: var(--ink-dim);
+      }
+      .nav-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+      .nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+      .side .foot { margin-top: auto; font-size: 11.5px; color: var(--ink-faint); padding: 0 10px; }
+
+      /* 主区 */
+      .main { padding: 22px 28px 28px; overflow: hidden; display: flex; flex-direction: column; gap: 18px; }
+      .top { display: flex; align-items: center; justify-content: space-between; }
+      .top h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.01em; }
+      .top .sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 4px; }
+      .top .actions { display: flex; gap: 8px; }
+      .btn {
+        font: inherit; font-size: 12.5px; padding: 7px 14px; border-radius: 8px;
+        border: 1px solid var(--line); background: var(--card); color: var(--ink-dim);
+      }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+      .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+      .kpi {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 15px 16px;
+      }
+      .kpi .k { font-size: 12px; color: var(--ink-faint); letter-spacing: 0.02em; }
+      .kpi .v { font-size: 24px; font-weight: 600; margin-top: 8px; font-variant-numeric: tabular-nums; }
+      .kpi .d { font-size: 11.5px; margin-top: 6px; color: #2f9e6b; }
+      .kpi .d.down { color: #d0605f; }
+
+      .panels { display: grid; grid-template-columns: 1.55fr 1fr; gap: 14px; flex: 1 1 auto; min-height: 0; }
+      .panel {
+        background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+        padding: 16px 18px; display: flex; flex-direction: column; min-height: 0;
+      }
+      .panel h3 { margin: 0 0 14px; font-size: 13px; font-weight: 600; color: var(--ink); }
+
+      table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      th {
+        text-align: left; font-weight: 500; color: var(--ink-faint);
+        padding: 0 10px 9px; border-bottom: 1px solid var(--line); font-size: 11.5px;
+      }
+      td { padding: 10px; border-bottom: 1px solid #f1f4f8; color: var(--ink-dim); }
+      td:first-child { color: var(--ink); }
+      .tag {
+        display: inline-block; padding: 1px 8px; border-radius: 999px;
+        font-size: 11px; background: #eef7f1; color: #2f9e6b;
+      }
+      .tag.warn { background: #fdf3e8; color: #c07a2a; }
+      .tag.idle { background: #f1f4f8; color: var(--ink-faint); }
+
+      /* 柱状图：纯 CSS，只为让背景有信息密度 */
+      .bars { display: flex; align-items: flex-end; gap: 9px; height: 100%; min-height: 120px; padding-top: 6px; }
+      .bars .bar {
+        flex: 1; border-radius: 4px 4px 0 0;
+        background: linear-gradient(180deg, #6fa6ea, #cfe0f7);
+      }
+      .bars .bar.hi { background: linear-gradient(180deg, #3f7fe0, #a9cbf3); }
+      .legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11.5px; color: var(--ink-faint); }
+      .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+
+      /* ── 顶部状态条（悬浮球组件之外的少量宿主 UI）── */
+      .status {
+        position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 10px;
+        padding: 6px 14px; border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid var(--line);
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        font-size: 12px; letter-spacing: 0.04em; color: var(--ink-dim);
+        pointer-events: none; z-index: 2147483647;
+        opacity: 0; transition: opacity 260ms ease;
+      }
+      html[data-orb-active='1'] .status { opacity: 1; }
+      .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #c3ccd8; }
+      .status .dot.on { background: #2f9e6b; }
+      #voiceBadge { color: var(--ink); }
+      #voiceBadge[data-voice='thinking'] { color: #c07a2a; }
+      #voiceBadge[data-voice='user'] { color: #2f9e6b; }
+      #voiceBadge[data-voice='ai'] { color: var(--accent); }
+      #callTimer { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+
+      /* 右上角设置入口 */
+      .gear {
+        position: fixed; top: 16px; right: 20px; z-index: 2147483647;
+        width: 34px; height: 34px; display: grid; place-items: center;
+        border-radius: 50%; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.8);
+        color: var(--ink-dim); font-size: 16px; cursor: pointer;
+        opacity: 0; transition: opacity 300ms ease, color 200ms ease;
+      }
+      html[data-orb-active='1'] .gear, .gear:hover { opacity: 1; }
+      .gear:hover { color: var(--ink); }
+
+      /* 设置浮层 */
+      .settings {
+        position: fixed; top: 60px; right: 20px; z-index: 2147483647; width: 300px;
+        padding: 14px 16px; border-radius: 14px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid var(--line);
+        backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+        display: none; flex-direction: column; gap: 12px;
+        font-size: 12.5px; color: var(--ink);
+        box-shadow: 0 20px 48px rgba(30, 64, 120, 0.14);
+      }
+      .settings.open { display: flex; }
+      .settings h4 { margin: 0 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; color: var(--ink-faint); }
+      .settings .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .settings .row > label { color: var(--ink-dim); }
+      .settings select, .settings button {
+        font: inherit; color: var(--ink);
+        background: #fff; border: 1px solid var(--line);
+        border-radius: 7px; padding: 4px 10px; cursor: pointer; outline: none;
+      }
+      .settings select { max-width: 180px; }
+      .settings .tg { min-width: 46px; }
+      .settings .tg.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+      .settings .grp { display: flex; gap: 6px; }
+      .settings .grp button { flex: 1; }
+      .settings .close { align-self: flex-end; background: none; border: none; color: var(--ink-faint); font-size: 15px; padding: 0 4px; }
+
+      /* 跟随页提示条：另一个标签页正在占用语音 */
+      .follower {
+        position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+        z-index: 2147483647; display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px 8px 14px; border-radius: 10px;
+        background: rgba(255, 255, 255, 0.94); border: 1px solid var(--line);
+        box-shadow: 0 12px 32px rgba(30, 64, 120, 0.12);
+        font-size: 12.5px; color: var(--ink-dim);
+      }
+      .follower button {
+        font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 7px;
+        border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer;
+      }
+      .follower button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .envwarn {
+        position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
+        padding: 8px 16px; font-size: 12.5px; line-height: 1.5;
+        background: #fdf3e8; color: #9a5f1c;
+        border-bottom: 1px solid #f0ddc2; text-align: center;
+      }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="envwarn" id="envWarn" hidden></div>
+
+    <!-- 模拟的管理后台（真实集成时由宿主提供） -->
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="mark"></span><b>瀚涛百事通</b></div>
+        <div class="nav-item on"><span class="dot"></span>工作台</div>
+        <div class="nav-item"><span class="dot"></span>制度与流程</div>
+        <div class="nav-item"><span class="dot"></span>报销与考勤</div>
+        <div class="nav-item"><span class="dot"></span>资产台账</div>
+        <div class="nav-item"><span class="dot"></span>数据报表</div>
+        <div class="nav-item"><span class="dot"></span>系统设置</div>
+        <div class="foot">内部系统 · 仅限员工访问</div>
+      </aside>
+
+      <main class="main">
+        <div class="top">
+          <div>
+            <h1>运营总览</h1>
+            <div class="sub">数据更新于 10 分钟前 · 覆盖 6 个部门</div>
+          </div>
+          <div class="actions">
+            <button class="btn">导出报表</button>
+            <button class="btn primary">新建工单</button>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><div class="k">本月工单</div><div class="v">1,284</div><div class="d">较上月 +12.4%</div></div>
+          <div class="kpi"><div class="k">平均处理时长</div><div class="v">3.2 天</div><div class="d">较上月 −8.1%</div></div>
+          <div class="kpi"><div class="k">待审批</div><div class="v">17</div><div class="d down">3 项已超时</div></div>
+          <div class="kpi"><div class="k">满意度</div><div class="v">96.8%</div><div class="d">较上月 +1.2%</div></div>
+        </div>
+
+        <div class="panels">
+          <section class="panel">
+            <h3>最近工单</h3>
+            <table>
+              <thead>
+                <tr><th>编号</th><th>事项</th><th>申请人</th><th>状态</th><th>更新</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>WO-2418</td><td>笔记本补贴申领</td><td>李工</td><td><span class="tag">处理中</span></td><td>10 分钟前</td></tr>
+                <tr><td>WO-2417</td><td>差旅报销复核</td><td>王敏</td><td><span class="tag">已完成</span></td><td>32 分钟前</td></tr>
+                <tr><td>WO-2416</td><td>会议室设备报修</td><td>陈琦</td><td><span class="tag warn">待审批</span></td><td>1 小时前</td></tr>
+                <tr><td>WO-2415</td><td>权限变更申请</td><td>赵磊</td><td><span class="tag">已完成</span></td><td>2 小时前</td></tr>
+                <tr><td>WO-2414</td><td>供应商资料归档</td><td>周宁</td><td><span class="tag idle">已退回</span></td><td>3 小时前</td></tr>
+                <tr><td>WO-2413</td><td>月度考勤核对</td><td>孙悦</td><td><span class="tag">处理中</span></td><td>4 小时前</td></tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="panel">
+            <h3>近七日处理量</h3>
+            <div class="bars">
+              <div class="bar" style="height: 42%"></div>
+              <div class="bar" style="height: 58%"></div>
+              <div class="bar" style="height: 48%"></div>
+              <div class="bar hi" style="height: 76%"></div>
+              <div class="bar" style="height: 64%"></div>
+              <div class="bar" style="height: 86%"></div>
+              <div class="bar" style="height: 71%"></div>
+            </div>
+            <div class="legend">
+              <span><i style="background: #3f7fe0"></i>峰值日</span>
+              <span><i style="background: #cfe0f7"></i>常规</span>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="status">
+      <span class="dot" id="liveDot"></span>
+      <span id="connText">待唤起</span>
+      <span id="voiceBadge" data-voice="idle">待机</span>
+      <span id="callTimer" hidden></span>
+    </div>
+
+    <div class="gear" id="gear" title="设置">⋯</div>
+
+    <div class="follower" id="followerBanner" hidden>
+      <span>语音会话在另一个标签页进行中，本页可继续打字。</span>
+      <button class="primary" id="btnTakeover">接管语音</button>
+      <button id="followerDismiss">知道了</button>
+    </div>
+
+    <div class="settings" id="settings">
+      <button class="close" id="settingsClose" aria-label="关闭">×</button>
+      <h4>设置</h4>
+      <div class="row">
+        <label for="micSel">麦克风</label>
+        <select id="micSel"></select>
+      </div>
+      <div class="row">
+        <label>麦克风自检</label>
+        <button id="btnMicTest">测试</button>
+      </div>
+      <div class="row">
+        <label>回声消除</label>
+        <button class="tg" id="tgAec">开</button>
+      </div>
+      <div class="row">
+        <label>上行静音</label>
+        <button class="tg" id="tgUpGate">关</button>
+      </div>
+      <div class="row">
+        <label>粒子背景</label>
+        <button class="tg" id="tgParticles">开</button>
+      </div>
+      <div class="row">
+        <label>主题</label>
+        <button class="tg" id="tgTheme">浅色</button>
+      </div>
+      <div class="row">
+        <label>日志</label>
+        <button class="tg" id="tgLog">开</button>
+      </div>
+      <div class="grp">
+        <button id="btnLogDump">导出日志</button>
+        <button id="btnCall">通话 / 挂断</button>
+      </div>
+    </div>
+
+    <ai-orb-chat></ai-orb-chat>
+
+    <script type="module" src="/dist/app.js"></script>
+  </body>
+</html>

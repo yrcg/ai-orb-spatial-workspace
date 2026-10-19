@@ -1,0 +1,27 @@
+# 不进镜像：密钥、日志、证书、测试、文档、归档
+.env
+key.txt
+logs/
+certs/
+tests/
+docs/
+archive/
+*.md
+start.bat
+start.sh
+start-lan.bat
+scripts/
+# 前端源码与依赖不进镜像（只需 public/dist 产物）
+web/
+# 上游参考素材不进镜像
+reference/
+# 通用
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+Dockerfile
+docker-compose.yml
+.dockerignore

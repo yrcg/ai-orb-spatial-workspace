@@ -1,0 +1,6 @@
+# 运行时依赖
+# websockets —— 本地中继的 WebSocket 实现
+# cryptography —— 启用 HTTPS 时自动生成自签证书（--tls / PET_TLS=1）
+# 版本与本机已验证环境一致
+websockets==15.0.1
+cryptography>=42.0
