@@ -234,7 +234,12 @@ workspace.applyScene({ rev: 1, mode: 'split-right', surfaces: [/* ... */] });
 
 ---
 
-## 9. 已知边界（探索阶段）
+## 9. 后续计划
+
+P1 内容能力 → P2 语义路由与场景契约 → P3 空间智能 → P4 生态与生产化，
+每阶段的通过标准与指标见 [spatial-workspace-roadmap.md](spatial-workspace-roadmap.md)。
+
+## 10. 已知边界（探索阶段）
 
 - **未接模型**：场景由 `demo.ts` 的固定数据驱动；语义路由与 `/view` 接口尚未实现。
 - **未接 three.js**：`scene3d` 是等距 SVG 占位。
