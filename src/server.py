@@ -98,6 +98,27 @@ KB_BRIEF_HINT = os.environ.get(
     "（请尽量简洁、突出重点：直接给结论和关键数字，控制在 200 字以内，"
     "不要罗列无关条款和完整原文。）",
 )
+# KB_CHART_HINT（2026-10-19）：空间工作区打开时，让知识库智能体在正常回答之后
+# **追加**一个 ```chart 围栏。中继/前端会在把结果交给语音模型之前把这个块剥离，
+# 所以它既不会被念出来，也不会污染语音模型的上下文。
+# 协议刻意用 markdown 表格：模型最熟悉、容错最高，解析器只认表头 + 分隔行。
+# 可用 PET_KB_CHART_HINT 覆盖，或置空字符串关闭。
+KB_CHART_HINT = os.environ.get(
+    "PET_KB_CHART_HINT",
+    "如果回答里包含可以量化的对比数据（部门、月份、类别、占比、趋势等），"
+    "请在正文之后追加一个图表块，严格使用下面的格式；没有合适数据就不要输出。\n"
+    "```chart\n"
+    "title: 一句话标题\n"
+    "type: bars   # bars | line | table\n"
+    "unit: 件     # 有单位就写，没有可省略\n"
+    "| 类别 | 数值 |\n"
+    "| --- | --- |\n"
+    "| 研发 | 286 |\n"
+    "```\n"
+    "要求：正文仍然保持简洁口语；图表块只放数据，不要写解释；"
+    "不要在正文里复述表格内容。",
+)
+
 # 见 main_async 的说明：/kb 在 process_request 里等 KB，必须放宽握手超时
 HANDSHAKE_TIMEOUT = 90.0
 _KBT = {"token": "", "at": 0.0}
@@ -227,15 +248,17 @@ def _kb_token(refresh: bool = False) -> str:
     return _KBT["token"]
 
 
-def kb_ask_sync(question: str, timeout: float) -> dict:
+def kb_ask_sync(question: str, timeout: float, want_chart: bool = False) -> dict:
     """同步实现 —— 必须放在线程里跑（asyncio.to_thread），否则 12s 会卡住事件循环，
     连带着把语音中继一起卡死。"""
     tok = _kb_token()
     if not tok:
         return {"ok": False, "error": "kb_auth_failed"}
     t0 = time.time()
-    # 附上"简洁"要求（见 KB_BRIEF_HINT）；日志/前端仍用原始 question
-    prompt = (question + "\n\n" + KB_BRIEF_HINT).strip() if KB_BRIEF_HINT else question
+    # 附上"简洁"要求（见 KB_BRIEF_HINT）；日志/前端仍用原始 question。
+    # want_chart 时才附图表协议：不需要可视化的调用不额外增加输出长度。
+    hints = [h for h in (KB_BRIEF_HINT, KB_CHART_HINT if want_chart else "") if h]
+    prompt = (question + "\n\n" + "\n\n".join(hints)).strip() if hints else question
     try:
         j = _http_json(f"{KB_BASE}/chat", {"message": prompt},
                        {"Authorization": "Bearer " + tok}, timeout=timeout)
@@ -403,18 +426,21 @@ async def process_request(connection, request):
         except Exception:  # noqa: BLE001
             t = KB_TIMEOUT
         t = max(3.0, min(60.0, t))
+        # v=1 / view=1 → 请求检索智能体追加 ```chart 块（是否渲染由前端决定）
+        want_chart = (p.get("v", ["0"])[0] or "").strip() in ("1", "true", "chart")
         if not q:
             return json_response(json.dumps({"ok": False, "error": "empty_query"}), HTTPStatus.BAD_REQUEST)
         t0 = time.time()
         try:
-            res = await asyncio.to_thread(kb_ask_sync, q, t)
+            res = await asyncio.to_thread(kb_ask_sync, q, t, want_chart)
         except Exception as e:  # noqa: BLE001
             relay_log("kb_error", q=q[:60], err=f"{type(e).__name__}: {e}")
             res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         res["q"] = q[:200]
         res.setdefault("ms", int((time.time() - t0) * 1000))
         relay_log("kb_ask", q=q[:60], ok=res.get("ok"), ms=res["ms"],
-                  chars=len(res.get("answer") or ""), refs=len(res.get("refs") or []))
+                  chars=len(res.get("answer") or ""), refs=len(res.get("refs") or []),
+                  view=want_chart)
         return json_response(json.dumps(res, ensure_ascii=False))
 
     # 日志目录概览（便于确认落盘是否正常）

@@ -49,10 +49,22 @@ export function envFacts(): { date: string; weekday: string; time: string; locat
   };
 }
 
+/**
+ * 是否请求检索智能体追加图表块。
+ *
+ * 默认关闭：图表协议会让知识库多生成一段结构化输出，而工具结果处在
+ * 「语音模型等它才能开口」的关键路径上。只有空间工作区打开时才开启，
+ * 并且可以随时用设置面板关掉——关掉后请求参数与主链路完全一致。
+ */
+let chartRequested = false;
+export function setChartRequest(on: boolean): void { chartRequested = on; }
+export function isChartRequested(): boolean { return chartRequested; }
+
 /** 公司知识库：走本地中继代理（不让浏览器直连，避开 CORS 且 token 不出前端） */
 export async function kbAsk(q: string, timeoutSec: number): Promise<{ ok: boolean; answer?: string; error?: string }> {
   const t = Math.round(timeoutSec || 30);
-  const r = await fetch(`${CONFIG.kbPath}?q=${encodeURIComponent(q)}&t=${t}`, { cache: 'no-store' });
+  const v = chartRequested ? '&v=1' : '';
+  const r = await fetch(`${CONFIG.kbPath}?q=${encodeURIComponent(q)}&t=${t}${v}`, { cache: 'no-store' });
   const j = await r.json();
   if (!j || !j.ok) throw new Error((j && j.error) || 'kb_failed');
   return j;

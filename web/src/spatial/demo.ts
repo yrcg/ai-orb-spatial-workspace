@@ -138,7 +138,17 @@ export function demoScene(mode: SceneMode): SceneSpec {
         ],
       };
     case 'immersive':
-      return { ...base, mode, label: 'immersive', chat: 'compact', surfaces: [scene3dSurface] };
+      return {
+        ...base,
+        mode,
+        label: 'immersive',
+        chat: 'compact',
+        surfaces: [
+          { ...scene3dSurface, role: 'focus', priority: 0, prefer: 'center' },
+          { ...kpiSurface, role: 'support', priority: 1, prefer: 'left' },
+          { ...deptSurface, role: 'support', priority: 2, prefer: 'right' },
+        ],
+      };
     case 'focus':
       return {
         ...base,
@@ -152,11 +162,14 @@ export function demoScene(mode: SceneMode): SceneSpec {
   }
 }
 
+/**
+ * 目前只保留两种空间形态（2026-10-19 用户决定）：
+ * - 右分栏：展示少（1 块）时用，左边留给球和对话
+ * - 全局：展示多（2 块以上）时用，内容铺满，球保持原尺寸停左下
+ *
+ * split-left / stage / focus 的实现仍保留在编排器里，但不作为入口暴露。
+ */
 export const DEMO_MODES: Array<{ value: SceneMode; label: string }> = [
-  { value: 'companion', label: '伴随（默认）' },
-  { value: 'split-left', label: '左分栏' },
   { value: 'split-right', label: '右分栏' },
-  { value: 'stage', label: '中央舞台' },
-  { value: 'immersive', label: '全屏沉浸' },
-  { value: 'focus', label: '单主面板' },
+  { value: 'immersive', label: '全局' },
 ];

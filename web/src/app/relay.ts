@@ -5,6 +5,7 @@ import type { AIOrbChat } from '../orb';
 import { AudioReactive } from '../orb';
 import { CONFIG } from './config';
 import { QWEN_TOOLS, TOOL_LABEL, SLOW_TOOLS, runToolOnce } from './tools';
+import { extractChartBlocks, type ChartBlock } from '../spatial/chartMarkdown';
 import { Sounds, type SoundBus } from './sounds';
 
 /**
@@ -543,7 +544,9 @@ export class RelayClient {
     if (!this.#capActive || !this.#capText) return;
     if (!this.#capAudioSeen || this.#capStart == null || !this.#outCtx) return;
     const elapsed = Math.max(0, this.#outCtx.currentTime - this.#capStart);
-    const shown = this.#capText.slice(0, Math.min(this.#capText.length, Math.floor(elapsed * 6.5)));
+    // 字幕只显示正文：模型若误把围栏也说了，至少界面上不出现一串 JSON
+    const visible = extractChartBlocks(this.#capText).text;
+    const shown = visible.slice(0, Math.min(visible.length, Math.floor(elapsed * 6.5)));
     if (!shown) return;
     if (!this.#curAsstOpen) { this.#orb.startStream(); this.#curAsstOpen = true; }
     this.#orb.setAssistantLive(shown);
@@ -559,7 +562,9 @@ export class RelayClient {
   #endBot(keepPartial: boolean): void {
     this.#captionStop();
     if (this.#curAsstOpen || (this.#capActive && this.#capText)) {
-      if (this.#capActive && this.#capText && !keepPartial) this.#orb.setAssistantLive(this.#capText);
+      const parsed = extractChartBlocks(this.#capText);
+      if (parsed.charts.length) this.#emitVisuals(parsed.charts, 'voice');
+      if (this.#capActive && parsed.text && !keepPartial) this.#orb.setAssistantLive(parsed.text);
       this.#orb.endStream();
     }
     this.#curAsstOpen = false;
@@ -618,6 +623,21 @@ export class RelayClient {
 
   // ───────────────────────── 工具 ─────────────────────────
 
+  /**
+   * 把捕获到的图表交给空间舞台。
+   * 走 DOM 事件而不是直接 import 舞台：relay 不认识 spatial，
+   * 关闭空间工作区时这条事件也没人监听，语音链路完全不受影响。
+   */
+  #emitVisuals(charts: ChartBlock[], source?: string): void {
+    if (!charts.length) return;
+    this.#orb.dispatchEvent(new CustomEvent('orb:visuals', {
+      detail: { charts, source: source ?? 'tool' },
+      bubbles: true,
+      composed: true,
+    }));
+    this.log('visuals', { count: charts.length, kinds: charts.map((c) => c.kind), source: source ?? 'tool' });
+  }
+
   #toolShow(name: string, callId: string | null): void {
     const label = TOOL_LABEL[name] || name;
     this.#orb.addToolChip(name, callId, label);
@@ -645,10 +665,17 @@ export class RelayClient {
     this.#orb.finishToolChip(name, ok, callId, TOOL_LABEL[name] || name);
     this.#orb.pulse(ok ? 0.45 : 0.3);   // 工具查完：球亮一下，表示"拿到了"
 
+    // 关键：图表块在回灌模型之前剥离。
+    // 否则语音模型会把 JSON / md 表格当正文念出来，而且它也没必要看到这些数据。
+    const parsed = extractChartBlocks(out);
+    if (parsed.charts.length) this.#emitVisuals(parsed.charts, name);
+    const payload = parsed.text
+      || '（数据图表已展示在界面上，请用一两句话概括结论。）';
+
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({
       type: 'conversation.item.create',
-      item: { type: 'function_call_output', call_id: callId, output: out },
+      item: { type: 'function_call_output', call_id: callId, output: payload },
     }));
     fc.pending = true;
     fc.pendingGen = fc.gen;
@@ -895,6 +922,7 @@ export class RelayClient {
     const epoch = this.#epoch;
 
     try {
+      let finalText = '';
       await this.#textSession(async (ws) => {
         if (this.#textWs !== ws || ws.readyState !== 1) throw new Error('text_ws_closed');
         // 会话配置每条 WS 只发一次：回答进行中再发 session.update 会被服务端拒绝
@@ -948,7 +976,7 @@ export class RelayClient {
                 if (!out) break;
                 this.#orb.setThinking(false);
                 if (!this.#curAsstOpen) { this.#orb.startStream(); this.#curAsstOpen = true; }
-                this.#orb.setAssistantLive(out);
+                this.#orb.setAssistantLive(extractChartBlocks(out).text);
                 // 通话中打字提问：这次回答没有音频，别把状态改成「说话中」，
                 // 否则角标会一直停在说话中、球也停在发声形态。
                 if (!inCall && this.#orb.voiceState !== 'ai') this.#ev.onVoice('ai');
@@ -982,6 +1010,7 @@ export class RelayClient {
                   }).catch(() => finish());
                   return;
                 }
+                finalText = out;
                 finish();
                 break;
               }
@@ -1001,9 +1030,12 @@ export class RelayClient {
 
           // 兜底：30s 内没有任何回应就收手，避免界面永远转圈
           window.setTimeout(() => { if (!sawAny && !settled) fail(new Error('timeout')); }, 30000);
-          void out;
         });
       });
+      if (finalText) {
+        const parsed = extractChartBlocks(finalText);
+        if (parsed.charts.length) this.#emitVisuals(parsed.charts, 'text');
+      }
     } catch (e) {
       const msg = (e as Error).message || String(e);
       // 用户主动收起时我们会关掉文字 WS，这是预期内，不该弹错误提示

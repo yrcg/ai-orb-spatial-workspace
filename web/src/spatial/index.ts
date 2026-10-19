@@ -3,6 +3,7 @@ import './stage';
 import { SpatialStage, type SpatialStageEventDetail } from './stage';
 import { demoScene, DEMO_MODES } from './demo';
 import { normalizeScene } from './spec';
+import { chartsToSurfaces, modeForCount, type ChartBlock } from './chartMarkdown';
 import type { SceneMode, SceneSpec } from './types';
 import type { AIOrbChat } from '../orb';
 
@@ -27,12 +28,20 @@ export class SpatialWorkspace {
   readonly stage: SpatialStage;
   #orb: AIOrbChat;
   #enabled: boolean;
-  #mode: SceneMode = 'companion';
+  #mode: SceneMode = 'split-right';
   #lastScene: SceneSpec | null = null;
   #onPlan = (event: Event): void => {
     const { plan } = (event as CustomEvent<SpatialStageEventDetail>).detail;
     // companion = 没有空间编排需求，交还给 orb 的默认布局
     this.#orb.setSpatialPlan(plan.mode === 'companion' ? null : plan);
+  };
+
+  /** 来自工具/回复的图表块（relay 剥离后派发） */
+  #onVisuals = (event: Event): void => {
+    if (!this.#enabled) return;
+    const detail = (event as CustomEvent<{ charts: ChartBlock[]; source?: string }>).detail;
+    if (!detail?.charts?.length) return;
+    this.showCharts(detail.charts);
   };
 
   constructor(options: SpatialWorkspaceOptions) {
@@ -44,6 +53,7 @@ export class SpatialWorkspace {
     stage.setTheme(options.theme ?? 'light');
     stage.setInsets(options.insets ?? { top: 68, right: 24, bottom: 20, left: 24 });
     stage.addEventListener('spatial:layout', this.#onPlan);
+    this.#orb.addEventListener('orb:visuals', this.#onVisuals);
     stage.setEnabled(this.#enabled);
   }
 
@@ -77,6 +87,35 @@ export class SpatialWorkspace {
     this.applyScene(demoScene(mode));
   }
 
+  /**
+   * 把捕获到的图表放进工作区。
+   * 数量决定形态：1 块 → 右分栏（左边留给球和对话）；2 块以上 → 全局。
+   * 这是目前唯一"自动编排"的入口，后续语义路由也走这里。
+   */
+  showCharts(charts: ChartBlock[]): SceneSpec | null {
+    if (!this.#enabled || !charts.length) return null;
+    const rev = (this.#lastScene?.rev ?? 0) + 1;
+    const mode = modeForCount(charts.length);
+    const scene: SceneSpec = {
+      rev,
+      mode,
+      surfaces: chartsToSurfaces(charts, rev),
+      chat: mode === 'immersive' ? 'compact' : 'center',
+      transition: 'standard',
+      provenance: { route: 'chart-markdown', confidence: 1 },
+      label: `${mode} · ${charts.length} 块`,
+    };
+    this.#mode = mode;
+    this.applyScene(scene);
+    return scene;
+  }
+
+  /** 清空工作区（下一轮没有图表时调用） */
+  clearScene(): void {
+    this.#mode = 'split-right';
+    this.applyScene({ rev: (this.#lastScene?.rev ?? 0) + 1, mode: 'split-right', surfaces: [] });
+  }
+
   /** 应用一份场景（未来由中继的视觉路由调用，现在也可以手动传） */
   applyScene(input: unknown): void {
     if (!this.#enabled) return;
@@ -97,6 +136,7 @@ export class SpatialWorkspace {
 
   dispose(): void {
     this.stage.removeEventListener('spatial:layout', this.#onPlan);
+    this.#orb.removeEventListener('orb:visuals', this.#onVisuals);
     this.#orb.setSpatialPlan(null);
   }
 }

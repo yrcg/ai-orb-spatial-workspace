@@ -89,7 +89,14 @@ function splitAreas(mode: SceneMode, ins: Insets, W: number): {
   };
 }
 
-function buildSlots(mode: SceneMode, vp: Viewport, ins: Insets, W: number, H: number): Slot[] {
+function buildSlots(
+  mode: SceneMode,
+  vp: Viewport,
+  ins: Insets,
+  W: number,
+  H: number,
+  surfaceCount: number,
+): Slot[] {
   if (mode === 'companion') return [];
 
   if (mode === 'split-left' || mode === 'split-right') {
@@ -103,13 +110,50 @@ function buildSlots(mode: SceneMode, vp: Viewport, ins: Insets, W: number, H: nu
   }
 
   if (mode === 'immersive') {
-    return [{
-      id: 'full',
-      rect: { x: 0, y: 0, w: vp.w, h: vp.h },
+    // 只有一块内容：铺满整屏，球浮在左下（刻意重叠）。
+    if (surfaceCount <= 1) {
+      return [{
+        id: 'full',
+        rect: { x: 0, y: 0, w: vp.w, h: vp.h },
+        side: 'center',
+        roles: ['focus', 'support'],
+        allowOrbOverlap: true,
+      }];
+    }
+
+    // 多块内容：主区 + 右侧栏。全局不是"一张图铺满"，
+    // 而是"整屏被内容接管"，所以要有容纳 2–3 块的结构。
+    const gap = 18;
+    // 左下停着原尺寸的球，主内容不能从最左边起：留出球的直径 + 呼吸间距
+    const orbSlot = clamp(Math.round(vp.h * 0.224), 120, 200);
+    const leftGutter = ins.left + orbSlot + 44;
+    const mainW = Math.round((W - orbSlot - 44) * 0.60);
+    const railX = leftGutter + mainW + gap;
+    const railW = Math.max(220, vp.w - ins.right - railX);
+    const top = ins.top;
+    const h = Math.max(220, vp.h - ins.bottom - top);
+    const slots: Slot[] = [{
+      id: 'main',
+      rect: { x: leftGutter, y: top, w: mainW, h },
       side: 'center',
       roles: ['focus', 'support'],
-      allowOrbOverlap: true,
     }];
+    if (railW >= 220) {
+      const half = Math.floor((h - gap) / 2);
+      slots.push({
+        id: 'rail-top',
+        rect: { x: railX, y: top, w: railW, h: half },
+        side: 'right',
+        roles: ['support', 'control'],
+      });
+      slots.push({
+        id: 'rail-bottom',
+        rect: { x: railX, y: top + half + gap, w: railW, h: h - half - gap },
+        side: 'right',
+        roles: ['support', 'ambient'],
+      });
+    }
+    return slots;
   }
 
   if (mode === 'focus') {
@@ -197,24 +241,36 @@ function planOrb(mode: SceneMode, vp: Viewport, ins: Insets, scene: SceneSpec): 
     };
   }
 
+  // 活跃态球径：与默认两态布局完全一致（vh × 0.28 × 0.8）。
+  // 空间编排不缩小球 —— 用户明确要求保持原大小，空间不够时只左移。
+  const activeD = cap(clamp(Math.round(vp.h * 0.224), 120, 200));
+  const W = vp.w - ins.left - ins.right;
+
   if (mode === 'split-left' || mode === 'split-right') {
-    const W = vp.w - ins.left - ins.right;
     const H = vp.h - ins.top - ins.bottom;
     const a = splitAreas(mode, ins, W);
-    const d = cap(clamp(Math.round(vp.h * 0.17), 96, 136));
+
+    // 球在「内容列 + 对话区」这一侧。默认居中于该侧；
+    // 当内容面板变宽、这一侧被挤压时，x 会被推向左边缘 —— 这就是"左移让位"。
+    const regionX = a.chatX;
+    const regionW = a.chatW;
+    const minCx = regionX + activeD / 2 + 12;
+    const maxCx = regionX + regionW - activeD / 2 - 12;
+    const centerCx = regionX + regionW / 2;
+    const cx = maxCx >= minCx ? clamp(centerCx, minCx, maxCx) : minCx;
     const y = clamp(
-      ins.top + H * 0.66,
-      ins.top + 220 + d / 2,
-      vp.h - ins.bottom - d / 2 - 88,
+      ins.top + H * 0.68,
+      ins.top + activeD / 2 + 88,
+      vp.h - ins.bottom - activeD / 2 - 64,
     );
-    return { x: a.chatX + a.chatW / 2, y, diameter: d, hidden };
+    return { x: cx, y, diameter: activeD, hidden };
   }
 
-  const d = cap(mode === 'immersive' ? 54 : mode === 'stage' ? 62 : 66);
+  // 全屏（全局）态：内容铺满，球保持原尺寸浮在左下。
   return {
-    x: ins.left + 18 + d / 2,
-    y: vp.h - ins.bottom - 18 - d / 2,
-    diameter: d,
+    x: ins.left + 22 + activeD / 2,
+    y: vp.h - ins.bottom - 22 - activeD / 2,
+    diameter: activeD,
     hidden,
   };
 }
@@ -246,17 +302,21 @@ function planChat(mode: SceneMode, vp: Viewport, ins: Insets, orb: OrbPlan, W: n
   }
 
   // 字幕式对话：贴在屏幕下缘，像视频字幕，不横穿图表中部。
-  const w = Math.round(Math.max(360, Math.min(760, W - 160)));
+  // 左侧要给停靠的球留出约 200px，所以字幕区整体右移，不再严格居中。
   const bottom = vp.h - ins.bottom;
-  // 字幕区高度按"两行正文 + 输入行"给的，留出安全边距
   const h = 84;
   const y = Math.round(bottom - h - 34);
+  const leftReserve = orb.x + orb.diameter / 2 + 28;
+  const availLeft = Math.max(leftReserve, ins.left);
+  const availW = Math.max(320, vp.w - ins.right - availLeft);
+  const w = Math.round(Math.min(760, availW));
+  const x = Math.round(availLeft + (availW - w) / 2);
   return {
-    x: Math.round(ins.left + (W - w) / 2),
+    x,
     y,
     w,
     h,
-    composerX: Math.round(ins.left + (W - w) / 2),
+    composerX: x,
     composerY: Math.round(bottom - 34),
     composerW: w,
     mode: 'compact',
@@ -401,7 +461,7 @@ export function planLayout(input: LayoutInput): LayoutPlan {
     ? chat.y - 12
     : vp.h - ins.bottom;
   const contentH = Math.max(200, reserveBottom - ins.top);
-  const slots = buildSlots(scene.mode, vp, ins, W, contentH);
+  const slots = buildSlots(scene.mode, vp, ins, W, contentH, scene.surfaces.length);
 
   const focusId = scene.focusId ?? null;
   const ordered = [...scene.surfaces].sort((a, b) => {

@@ -4,6 +4,7 @@ import { RelayClient } from './relay';
 import { CONFIG } from './config';
 import { TabCoordinator, type TabRole, type SyncMessage } from './tabLock';
 import { SpatialWorkspace, DEMO_MODES } from '../spatial';
+import { setChartRequest } from './tools';
 import type { SceneMode } from '../spatial';
 
 /**
@@ -383,7 +384,7 @@ if (workspace && spatialMode) {
     option.textContent = item.label;
     spatialMode.append(option);
   }
-  spatialMode.value = 'companion';
+  spatialMode.value = workspace?.mode ?? 'split-right';
   spatialMode.addEventListener('change', () => {
     workspace?.setMode(spatialMode.value as SceneMode);
   });
@@ -396,6 +397,8 @@ tgSpatial?.addEventListener('click', () => {
   spatialOn = !spatialOn;
   paintSpatial();
   workspace.setEnabled(spatialOn);
+  // 只有工作区打开时才让检索智能体附带图表块；关闭即回到原请求
+  setChartRequest(spatialOn);
   if (spatialOn) {
     if (spatialMode) spatialMode.value = workspace.mode;
     workspace.setMode(workspace.mode);
