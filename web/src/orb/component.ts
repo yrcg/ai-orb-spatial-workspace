@@ -131,7 +131,15 @@ const STYLES = `
   transform: translate(var(--orb-tx), var(--orb-ty)) scale(var(--orb-scale));
   pointer-events: auto;
   cursor: pointer;
+  /* canvas 带 tabindex="0"，键盘聚焦时浏览器会画一圈 auto 的**方形**焦点框，
+     落在圆形球外围非常突兀。这里清掉，改用贴合球体轮廓的圆形微光
+     （drop-shadow 走 canvas 的 alpha 通道，形状跟着球而不是画布方块）。 */
+  outline: none;
+  border: 0;
 }
+.canvas:focus,
+.canvas:focus-visible { outline: none; border: 0; }
+.canvas:focus-visible { filter: drop-shadow(0 0 14px rgba(38, 112, 214, 0.5)); }
 :host([data-phase='active']) .canvas { cursor: default; }
 .particles {
   position: absolute;

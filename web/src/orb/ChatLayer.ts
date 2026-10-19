@@ -165,7 +165,10 @@ const STYLES = `
   -webkit-backdrop-filter: blur(6px);
 }
 :host([data-phase='active']) .composer { pointer-events: auto; }
-/* 隐形热区：上下各放宽一些，用户不用精确压在那条细线上 */
+/* 隐形热区：上下各放宽一些，用户不用精确压在那条细线上。
+   ⚠ 它盖在 textarea 之上，命中测试会落到 .composer 本身，所以
+   textarea/.send 必须提层（z-index），并给 .composer 挂点击兜底聚焦，
+   否则用户点了输入框却拿不到光标。 */
 .composer::before {
   content: '';
   position: absolute;
@@ -174,6 +177,8 @@ const STYLES = `
   top: -18px;
   bottom: -14px;
 }
+.composer textarea,
+.composer .send { position: relative; z-index: 1; }
 .composer:hover,
 .composer:focus-within,
 .composer[data-has-text='1'] {
@@ -265,6 +270,13 @@ export class ChatLayer {
     this.#input.addEventListener('input', this.#onInput);
     this.#input.addEventListener('keydown', this.#onKey);
     this.#send.addEventListener('click', this.#onClick);
+    // .composer::before 热区会用指针事件吃掉 textarea 上的点击（命中测试落到
+    // .composer），这里兜底：点整条任意位置都聚焦输入框，点发送按钮除外。
+    this.#composer.addEventListener('click', (ev: MouseEvent): void => {
+      const t = ev.target as Element | null;
+      if (t && t.closest && t.closest('.send')) return;
+      this.focusInput();
+    });
     this.#showEmpty();
   }
 

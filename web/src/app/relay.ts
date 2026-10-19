@@ -104,15 +104,26 @@ export interface RelayEvents {
 }
 
 /**
- * 一条链路上的 function-call 续答状态。
+ * 一条链路上的「发起新一轮回答」状态。
+ *
  * 语音与文字是两条独立 WS，各持一份；共用会把彼此的 responseOpen 弄脏
  * （症状：一边工具查完永远不再续答）。
+ *
+ * ⚠ 上游（Qwen-Audio Realtime）同一时刻只允许一轮回答：在一轮还没结束时再发
+ *   response.create 会直接返回 error
+ *   "Cannot create response while another response is in progress."，
+ *   表现为用户说完一句后没有下文。所以所有 response.create 都必须经过
+ *   #sendCreate() 这一个闸门，而不是随手 ws.send。
  */
 interface FcState {
+  /** 上游是否有一轮在生成（response.created → response.done） */
   responseOpen: boolean;
+  /** 有新的 response.create 待发（等本轮结束 / 等工具回灌） */
   pending: boolean;
   gen: number;
   pendingGen: number;
+  /** 正在执行的工具数（并行调用时要全部回灌完才能续答） */
+  toolsInFlight: number;
 }
 
 export class RelayClient {
@@ -167,7 +178,9 @@ export class RelayClient {
   #capTimer = 0;
 
   // FC 时序
-  #fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolCalls: [] as Array<{ callId: string | null; name: string }> };
+  #fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolsInFlight: 0, toolCalls: [] as Array<{ callId: string | null; name: string }> };
+  /** 文字链路的续答状态：跨多次提问保留（text WS 是复用的，不能每次提问重置） */
+  #textFc: FcState = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolsInFlight: 0 };
   #curAsstOpen = false;
 
   // 本地 VAD（只用于界面状态，不建/删气泡）
@@ -216,7 +229,7 @@ export class RelayClient {
     this.#manualStop = false;
     this.#ev.onState('连接中…', 'info');
     this.#ev.onVoice('thinking');
-    this.#fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolCalls: [] };
+    this.#fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolsInFlight: 0, toolCalls: [] };
 
     if (!(await probeRelay())) {
       if (epoch !== this.#epoch) return;
@@ -274,7 +287,7 @@ export class RelayClient {
     this.#orb.discardLive();
     this.#orb.setListening(false);
     this.#orb.setThinking(false);
-    this.#fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolCalls: [] };
+    this.#fc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolsInFlight: 0, toolCalls: [] };
     this.#textBusy = false;
     this.#capActive = false;
     this.#sessionReady = false;
@@ -322,6 +335,8 @@ export class RelayClient {
     this.#orb.setThinking(false);
     this.#dropAudio = false;
     this.#fc.responseOpen = false;
+    // 打断后排队中的续答不再有意义（用户已经不要这一轮了）
+    this.#fc.pending = false;
     if (wasResponding) {
       // 文字链路和语音链路是两条 WS：取消必须发到真正在跑这一轮的那条
       const textAlive = this.#textWs && this.#textWs.readyState === 1;
@@ -442,17 +457,22 @@ export class RelayClient {
           this.#finishBotWhenSilent();
           this.#orb.setThinking(false);
         }
+        // 本轮结束 = 闸门打开：如果工具结果早已回灌、只是被压在队列里，现在补发
         this.#fcFollowUp();
         break;
       }
-      case 'error':
-        this.#ev.onError(String((m.error as { message?: string })?.message || JSON.stringify(m)));
+      case 'error': {
+        const emsg = String((m.error as { message?: string })?.message || JSON.stringify(m));
+        // 上游并发冲突是我们发早了（不是用户操作错误）：不弹红字，把状态交回闸门自愈
+        if (/another response is in progress/i.test(emsg)) break;
+        this.#ev.onError(emsg);
         this.#sounds.error();
         // 协议级错误可能不会再有 response.done，这里兜底退出思考态
         this.#orb.setThinking(false);
         this.#fc.responseOpen = false;
         this.#ev.onVoice(this.inCall ? 'user' : 'idle');
         break;
+      }
       default:
         break;
     }
@@ -632,6 +652,7 @@ export class RelayClient {
 
     if (this.#curAsstOpen) this.#endBot(false);       // 工具前的空档 → 封口当前气泡
 
+    fc.toolsInFlight++;
     let out = '';
     let ok = true;
     try {
@@ -640,12 +661,16 @@ export class RelayClient {
       out = '（查询失败，请稍后再问一次）';
       ok = false;
       this.#ev.onError(`工具失败：${String((e as Error)?.message || e)}`);
+    } finally {
+      fc.toolsInFlight = Math.max(0, fc.toolsInFlight - 1);
     }
     if (out.startsWith('（查询失败') || out.startsWith('（没有名为')) ok = false;
     this.#orb.finishToolChip(name, ok, callId, TOOL_LABEL[name] || name);
     this.#orb.pulse(ok ? 0.45 : 0.3);   // 工具查完：球亮一下，表示"拿到了"
 
     if (!ws || ws.readyState !== 1) return;
+    // 工具结果可以立刻回灌（conversation.item.create 不受"生成中"限制），
+    // 但**发起新一轮必须等这一轮结束**：这个事件到达时上游往往还没发 response.done。
     ws.send(JSON.stringify({
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output: out },
@@ -655,14 +680,28 @@ export class RelayClient {
     this.#fcFollowUp(ws, fc);
   }
 
+  /**
+   * 唯一允许发 `response.create` 的地方。
+   *
+   * 上游同一时刻只允许一轮回答，早发会被拒：
+   *   "Cannot create response while another response is in progress."
+   * 判定条件：本轮已结束（responseOpen=false）**且**没有工具还在跑；
+   * 不满足就挂起（pending），由 response.done 回调再补发一次。
+   */
+  #sendCreate(ws: WebSocket | null, fc: FcState): boolean {
+    if (!ws || ws.readyState !== 1) return false;
+    if (fc.responseOpen || fc.toolsInFlight > 0) return false;
+    ws.send(JSON.stringify({ type: 'response.create' }));
+    // 乐观置位：response.created 回来之前不再重复发送
+    fc.responseOpen = true;
+    fc.pending = false;
+    return true;
+  }
+
   #fcFollowUp(ws: WebSocket | null = this.#ws, fc: FcState = this.#fc): void {
     if (!fc.pending) return;
     if (fc.pendingGen !== fc.gen) { fc.pending = false; return; }
-    if (fc.responseOpen) return;
-    fc.pending = false;
-    if (!ws || ws.readyState !== 1) return;
-    ws.send(JSON.stringify({ type: 'response.create' }));
-    fc.responseOpen = true;
+    this.#sendCreate(ws, fc);
   }
 
   // ───────────────────────── 麦克风 ─────────────────────────
@@ -907,8 +946,9 @@ export class RelayClient {
           this.#textConfigured = true;
         }
 
-        // 文字链路独立的续答状态（不碰语音那条的 #fc）
-        const fc: FcState = { responseOpen: false, pending: false, gen: 0, pendingGen: -1 };
+        // 文字链路的续答状态：跨多次提问**保留**（这条 WS 是复用的，每次提问
+        // 新建一份会让上一轮没结束时的 responseOpen 丢失，从而盲发 response.create）。
+        const fc: FcState = this.#textFc;
         let out = '';
         let toolWork: Promise<void> | null = null;
         let sawAny = false;
@@ -967,27 +1007,30 @@ export class RelayClient {
                 fc.responseOpen = false;
                 const status = String((msg.response as { status?: string })?.status || '');
                 if (status === 'failed') { fail(new Error('本轮生成失败')); return; }
-                // 工具查完必须由客户端续答；等工具结果落定再发 response.create
+                // 工具查完必须由客户端续答：等工具结果落定后统一走闸门补发
                 const pending = toolWork;
                 toolWork = null;
-                if (pending) {
-                  pending.then(() => {
-                    if (settled) return;
-                    if (!fc.responseOpen && ws.readyState === 1) {
-                      fc.responseOpen = true;
-                      ws.send(JSON.stringify({ type: 'response.create' }));
-                    } else if (!fc.responseOpen) {
-                      finish();
-                    }
-                  }).catch(() => finish());
-                  return;
-                }
-                finish();
+                const afterTools = pending ? pending.then(() => undefined).catch(() => undefined) : Promise.resolve();
+                afterTools.then(() => {
+                  if (settled) return;
+                  // 工具还在跑就先挂着，由 #runTool 末尾的 #fcFollowUp 接管
+                  if (fc.toolsInFlight > 0) return;
+                  // 工具结果已回灌 → 补发新一轮，继续等它的 response.done
+                  if (fc.pending && this.#sendCreate(ws, fc)) return;
+                  if (!fc.responseOpen) finish();
+                });
                 break;
               }
-              case 'error':
-                fail(new Error(String((msg.error as { message?: string })?.message || 'api_error')));
+              case 'error': {
+                const emsg = String((msg.error as { message?: string })?.message || 'api_error');
+                // 上游并发冲突是"我们发早了"，不是用户错误：这里不弹红字，交给闸门自愈
+                if (/another response is in progress/i.test(emsg)) {
+                  fc.responseOpen = true;
+                  break;
+                }
+                fail(new Error(emsg));
                 break;
+              }
               default:
                 break;
             }
@@ -995,9 +1038,18 @@ export class RelayClient {
           ws.addEventListener('message', onMsg as EventListener);
           ws.addEventListener('close', onClose);
 
-          ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: text }] } }));
-          ws.send(JSON.stringify({ type: 'response.create' }));
-          fc.responseOpen = true;
+          // 上一轮可能还开着（用户打断后立刻再问）：先取消，再开新一轮。
+          // 直接发 response.create 会触发 "Cannot create response while another
+          // response is in progress."。
+          const begin = (): void => {
+            if (fc.responseOpen && ws.readyState === 1) {
+              try { ws.send(JSON.stringify({ type: 'response.cancel' })); } catch { /* ignore */ }
+              fc.responseOpen = false;
+            }
+            ws.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: text }] } }));
+            this.#sendCreate(ws, fc);
+          };
+          begin();
 
           // 兜底：30s 内没有任何回应就收手，避免界面永远转圈
           window.setTimeout(() => { if (!sawAny && !settled) fail(new Error('timeout')); }, 30000);
@@ -1027,6 +1079,8 @@ export class RelayClient {
     const ws = new WebSocket(wsUrl('text'));
     this.#textWs = ws;
     this.#textConfigured = false;      // 新连接 → 需要重新下发会话配置
+    // 新连接的上游是全新会话：续答状态必须重置，否则会带着旧连接的 responseOpen
+    this.#textFc = { responseOpen: false, pending: false, gen: 0, pendingGen: -1, toolsInFlight: 0 };
     await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error('text_ws_error')); });
     try { return await fn(ws); } catch (e) {
       // 失败/超时后丢弃这条连接，下次提问重新建（避免半死连接反复失败）
