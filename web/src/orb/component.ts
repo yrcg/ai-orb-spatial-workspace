@@ -2,6 +2,7 @@ import { DEFAULT_OPTIONS, type OrbOptions } from './options';
 import { ChatLayer, type ChatMessage, type ChatRole } from './ChatLayer';
 import type { AudioBands, OrbRenderer, OrbVisualState } from './renderers';
 import { getOrbFactory } from './renderers';
+import type { LayoutPlan } from '../spatial/types';
 
 /** 界面阶段：只有「空闲」与「活跃」两态 */
 export type OrbPhase = 'idle' | 'active';
@@ -131,11 +132,14 @@ const STYLES = `
   transform: translate(var(--orb-tx), var(--orb-ty)) scale(var(--orb-scale));
   pointer-events: auto;
   cursor: pointer;
+  /* 层级：遮罩(0) < 粒子/舞台(1-2) < 光晕(3) < 球(4) < 对话(6) */
+  z-index: 4;
 }
 :host([data-phase='active']) .canvas { cursor: default; }
 .particles {
   position: absolute;
   inset: 0;
+  z-index: 1;
   width: 100%;
   height: 100%;
   opacity: 0;
@@ -149,6 +153,7 @@ const STYLES = `
   position: absolute;
   left: 50%;
   top: 50%;
+  z-index: 3;
   display: block;
   pointer-events: none;
   opacity: 0;
@@ -159,6 +164,7 @@ const STYLES = `
 .overlay {
   position: absolute;
   inset: 0;
+  z-index: 0;
   /* 薄纱色由主题 token 决定；模糊半径由 JS 跟随编排曲线逐帧写入
      （--orb-blur-cur = 遮罩进度 × 目标模糊），所以是「越来越糊」，
      而不是先蒙一层白纱再突然失焦。 */
@@ -173,6 +179,7 @@ const STYLES = `
   position: absolute;
   left: 50%;
   top: 50%;
+  z-index: 5;
   width: 46px;
   height: 46px;
   margin: -23px 0 0 -23px;
@@ -188,6 +195,7 @@ const STYLES = `
   position: absolute;
   left: 50%;
   top: 50%;
+  z-index: 5;
   width: 40px;
   height: 40px;
   margin: -20px 0 0 -20px;
@@ -201,6 +209,7 @@ const STYLES = `
 }
 .hint {
   position: absolute;
+  z-index: 3;
   right: var(--orb-dock-margin-x, 32px);
   bottom: calc(var(--orb-dock-margin-y, 44px) - 24px);
   width: var(--orb-dock-size, 168px);
@@ -215,6 +224,7 @@ const STYLES = `
 :host([data-phase='active']) .hint { opacity: 0; }
 .close-hint {
   position: absolute;
+  z-index: 7;
   left: 50%;
   bottom: 22px;
   transform: translateX(-50%);
@@ -254,6 +264,9 @@ const STYLES = `
 const TEMPLATE = `
 <style>${STYLES}</style>
 <div class="overlay" part="overlay"></div>
+<!-- 空间舞台插槽：放在遮罩之上、球与对话层之下。
+     这样面板会被"浮起"而不是被遮罩糊掉，同时球和字幕仍然在面板之上。 -->
+<slot name="stage"></slot>
 <canvas class="particles" part="particles" aria-hidden="true"></canvas>
 <canvas class="aura" part="aura" aria-hidden="true"></canvas>
 <canvas class="canvas" part="canvas" role="button" tabindex="0" aria-label="双击唤起 AI 对话"></canvas>
@@ -300,6 +313,7 @@ export class AIOrbChat extends HTMLElement {
   #shock: HTMLDivElement;
   #overlay: HTMLDivElement;
   #unsupported: HTMLDivElement;
+  #closeHint: HTMLDivElement;
   #orb: OrbRenderer | null = null;
   #chat: ChatLayer | null = null;
   #phase: OrbPhase = 'idle';
@@ -329,6 +343,10 @@ export class AIOrbChat extends HTMLElement {
   #activeScale = 1;
   #activeTx = 0;
   #activeTy = 0;
+  /** 空间编排结果（null = 使用默认两态布局） */
+  #spatialPlan: LayoutPlan | null = null;
+  /** 正在应用新的空间计划：此时 #applyLayout 不要直接把姿态写到终点 */
+  #settling = false;
 
   // 动画
   #anim: { frames: Keyframe[]; start: number; dur: number; from: Pose; onDone?: () => void } | null = null;
@@ -376,6 +394,7 @@ export class AIOrbChat extends HTMLElement {
     this.#shock = this.#root.querySelector('.shock') as HTMLDivElement;
     this.#overlay = this.#root.querySelector('.overlay') as HTMLDivElement;
     this.#unsupported = this.#root.querySelector('.unsupported') as HTMLDivElement;
+    this.#closeHint = this.#root.querySelector('.close-hint') as HTMLDivElement;
   }
 
   connectedCallback(): void {
@@ -438,6 +457,29 @@ export class AIOrbChat extends HTMLElement {
   get options(): Readonly<OrbOptions> { return { ...this.#options }; }
   /** 对话层实例（chatEnabled=false 时为 null） */
   get chat(): ChatLayer | null { return this.#chat; }
+
+  /**
+   * 空间编排结果：由 <ai-spatial-stage> 计算后交进来。
+   *
+   * 传 null = 回到默认布局（右下停靠 + 屏心展开）。
+   * 这个入口让 orb 本身完全不知道"场景/展示面"的存在——它只接收最终的
+   * 位置、直径、对话区矩形，保持组件可独立使用。
+   */
+  setSpatialPlan(plan: LayoutPlan | null): void {
+    const changed = this.#spatialPlan !== plan;
+    this.#spatialPlan = plan;
+    // 先记下当前实际姿态：新版 #applyLayout 会因为 #settling 跳过"瞬移到终点"，
+    // 这样 #startAnim 才能从旧位置缓动到新位置（否则起点就是终点，看起来像瞬移）。
+    this.#settling = true;
+    try { this.#applyLayout(); } finally { this.#settling = false; }
+    // 收起/展开过程中不打断：那两段编排本身已经在动。
+    if (changed && this.#phase === 'active' && !this.#anim) this.#animateToRest(240);
+  }
+
+  /** 短距离让位：从当前姿态缓动到新的静止姿态 */
+  #animateToRest(ms: number): void {
+    this.#startAnim([{ t: ms, ...this.#restPose(), ease: easeOut }]);
+  }
 
   setOptions(patch: Partial<OrbOptions>): void {
     const prevOrb = this.#options.orb;
@@ -947,22 +989,45 @@ export class AIOrbChat extends HTMLElement {
     this.#activeTx = 0;
     this.#activeTy = (o.activeOrbCenterY - 0.5) * vh;
 
-    // 静态态（无动画时）直接落到对应目标
-    if (!this.#anim) {
+    // 空间编排覆盖：位置与直径由 SLO 决定（球让位/缩小/停靠左下都在这里生效）
+    const spatial = this.#spatialPlan;
+    if (spatial) {
+      this.#activeScale = Math.max(24, spatial.orb.diameter) / orbPx;
+      this.#activeTx = spatial.orb.x - vw / 2;
+      this.#activeTy = spatial.orb.y - vh / 2;
+      this.#canvas.style.opacity = spatial.orb.hidden ? '0' : '';
+      this.#canvas.style.pointerEvents = spatial.orb.hidden ? 'none' : '';
+    } else {
+      this.#canvas.style.opacity = '';
+      this.#canvas.style.pointerEvents = '';
+    }
+
+    // 静态态（无动画时）直接落到对应目标。
+    // #settling 时故意不写：调用方会用 #startAnim 从旧姿态补一段让位动画。
+    if (!this.#anim && !this.#settling) {
       this.#shown = this.#restPose();
       this.#applyPoseCss(this.#shown);
       this.#applyOverlay(this.#shown.overlay);
     }
 
-    // 对话层：对话流在球上方，输入框在球下方
-    if (this.#chat) {
-      const activeOrbPxNow = this.#activeScale * orbPx;
-      const orbTop = vh * o.activeOrbCenterY - activeOrbPxNow / 2;
-      const orbBottom = vh * o.activeOrbCenterY + activeOrbPxNow / 2;
-      const streamTop = o.chatTop;
-      const streamH = Math.max(120, orbTop - o.chatTop - o.chatGap);
-      const composerTop = orbBottom + 22;
-      this.#chat.layout(streamTop, streamH, composerTop);
+    // 对话层：空间模式下用 SLO 的矩形，否则回到"球上方对话流 / 球下方输入框"
+    if (this.#chat && spatial) {
+      this.#chat.layoutSpatial(spatial.chat);
+      // 关闭按钮跟着对话列走：模式切换后不该还留在屏幕底部正中
+      const cx = spatial.chat.composerX + spatial.chat.composerW / 2;
+      this.#closeHint.style.left = `${Math.round(cx)}px`;
+      this.#closeHint.style.top = `${Math.round(spatial.chat.composerY + 52)}px`;
+      this.#closeHint.style.bottom = 'auto';
+    } else {
+      this.#closeHint.style.removeProperty('left');
+      this.#closeHint.style.removeProperty('top');
+      this.#closeHint.style.removeProperty('bottom');
+      if (this.#chat) {
+        const activeOrbPxNow = this.#activeScale * orbPx;
+        const orbTop = vh * o.activeOrbCenterY - activeOrbPxNow / 2;
+        const orbBottom = vh * o.activeOrbCenterY + activeOrbPxNow / 2;
+        this.#chat.layout(o.chatTop, Math.max(120, orbTop - o.chatTop - o.chatGap), orbBottom + 22);
+      }
     }
   }
 

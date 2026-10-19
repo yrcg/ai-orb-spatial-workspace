@@ -3,6 +3,8 @@ import { AIOrbChat, type VoiceState } from '../orb';
 import { RelayClient } from './relay';
 import { CONFIG } from './config';
 import { TabCoordinator, type TabRole, type SyncMessage } from './tabLock';
+import { SpatialWorkspace, DEMO_MODES } from '../spatial';
+import type { SceneMode } from '../spatial';
 
 /**
  * 宿主装配：把组件、中继客户端、设置面板接起来。
@@ -327,10 +329,28 @@ document.getElementById('followerDismiss')?.addEventListener('click', () => {
   if (banner) banner.hidden = true;
 });
 
+// ───────────────────────── 空间工作区（探索分支）─────────────────────────
+//
+// 默认关闭：不启用时球体仍是原来的两态布局，行为与主线完全一致。
+// 打开后舞台接管球的位置/直径/对话区矩形，模式可即时切换。
+// 回滚 = 关闭开关，或直接切回 main 分支（本模块不被其它代码依赖）。
+
+let workspace: SpatialWorkspace | null = null;
+try {
+  workspace = new SpatialWorkspace({ orb, enabled: false, theme: CONFIG.theme });
+} catch (e) {
+  // 舞台缺失/初始化失败都不影响主链路，静默退回默认布局
+  console.warn('[spatial] 初始化失败，已回退到默认布局：', e);
+}
+
+const tgSpatial = document.getElementById('tgSpatial') as HTMLButtonElement | null;
+const spatialMode = document.getElementById('spatialMode') as HTMLSelectElement | null;
+
 // 主题
 function applyTheme(theme: 'dark' | 'light'): void {
   document.documentElement.dataset.theme = theme;
   orb.setOptions({ theme });
+  workspace?.setTheme(theme);
   try { localStorage.setItem('pet-web-theme', theme); } catch { /* ignore */ }
 }
 const savedTheme = (localStorage.getItem('pet-web-theme') as 'dark' | 'light' | null) || CONFIG.theme;
@@ -338,4 +358,47 @@ applyTheme(savedTheme);
 document.getElementById('tgTheme')?.addEventListener('click', () => {
   const next = (document.documentElement.dataset.theme === 'light' ? 'dark' : 'light') as 'dark' | 'light';
   applyTheme(next);
+});
+
+// ───────────────────────── 空间工作区（探索分支）─────────────────────────
+//
+// 默认关闭：不启用时球体仍是原来的两态布局，行为与主线完全一致。
+// 打开后舞台接管球的位置/直径/对话区矩形，模式可即时切换。
+// 回滚 = 关闭开关，或直接切回 main 分支（本模块不被其它代码依赖）。
+
+let spatialOn = false;
+
+function paintSpatial(): void {
+  if (tgSpatial) {
+    tgSpatial.textContent = spatialOn ? '开' : '关';
+    tgSpatial.classList.toggle('on', spatialOn);
+  }
+  if (spatialMode) spatialMode.disabled = !spatialOn;
+}
+
+if (workspace && spatialMode) {
+  for (const item of DEMO_MODES) {
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = item.label;
+    spatialMode.append(option);
+  }
+  spatialMode.value = 'companion';
+  spatialMode.addEventListener('change', () => {
+    workspace?.setMode(spatialMode.value as SceneMode);
+  });
+}
+
+paintSpatial();
+
+tgSpatial?.addEventListener('click', () => {
+  if (!workspace) return;
+  spatialOn = !spatialOn;
+  paintSpatial();
+  workspace.setEnabled(spatialOn);
+  if (spatialOn) {
+    if (spatialMode) spatialMode.value = workspace.mode;
+    workspace.setMode(workspace.mode);
+  }
+  setStatus(spatialOn ? '空间工作区已启用' : '空间工作区已关闭', spatialOn ? 'ok' : 'info');
 });

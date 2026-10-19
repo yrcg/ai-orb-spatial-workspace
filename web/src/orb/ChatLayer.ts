@@ -23,6 +23,7 @@ const STYLES = `
   padding: 16px 4px;
   pointer-events: none;
   opacity: 0;
+  z-index: 6;
   transition: opacity 300ms ease;
   scrollbar-width: thin;
   scrollbar-color: var(--orb-hairline) transparent;
@@ -30,6 +31,37 @@ const STYLES = `
   mask-image: linear-gradient(to bottom, transparent 0%, #000 var(--chat-fade, 14%), #000 calc(100% - var(--chat-fade, 14%)), transparent 100%);
 }
 :host([data-phase='active']) .stream { opacity: 1; pointer-events: auto; }
+/* 空间编排模式：位置/宽度由 SLO 直接给出，不再走「水平居中」的默认规则。
+   注意这里只写 left/top/width/height，绝对定位元素不参与文档流，不会触发全局重排。 */
+:host([data-chat-spatial='1']) .stream {
+  left: var(--chat-x, 0px);
+  top: var(--chat-y, 0px);
+  width: var(--chat-w, 680px);
+  height: var(--chat-h, 320px);
+  transform: none;
+  max-width: none;
+}
+/* 字幕：不要矩形底板（会和图表打架），只用一层极淡的底部光晕 + 文字阴影 */
+:host([data-chat-mode='compact']) .stream {
+  padding: 8px 8px;
+  background: radial-gradient(56% 100% at 50% 100%, rgba(var(--orb-scrim), 0.18), transparent 88%);
+  border-radius: 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 90%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 90%, transparent 100%);
+}
+:host([data-chat-mode='compact']) .text {
+  font-size: 13px;
+  line-height: 1.64;
+  color: var(--orb-text-dim);
+  text-shadow: 0 1px 12px rgba(var(--orb-scrim), 0.85);
+}
+/* 字幕模式下内容压在图表/3D 上，空场提示要能看清 */
+:host([data-chat-mode='compact']) .streamInner[data-empty='1'] .empty { color: var(--orb-text-dim); }
+/* 空间模式里环境本身就有内容，空场提示只会变成噪点 */
+:host([data-chat-spatial='1']) .empty { display: none; }
+:host([data-chat-mode='compact']) .streamInner[data-empty='1'] .empty,
+:host([data-chat-mode='compact']) .text { text-align: center; }
+:host([data-chat-mode='compact']) .msg { max-width: 100%; align-self: center; align-items: center; }
 /* 内层负责「贴底对齐」。滚动容器必须是个普通块，否则 justify-content:flex-end
    会让 Chrome 少报 scrollHeight、顶部内容滚不回去。 */
 .streamInner {
@@ -160,6 +192,7 @@ const STYLES = `
   transition: border-color 220ms ease, opacity 240ms ease, transform 240ms ease;
   pointer-events: none;
   opacity: 0;
+  z-index: 6;
   background: rgba(var(--orb-scrim), 0.42);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
@@ -180,6 +213,18 @@ const STYLES = `
   opacity: 1;
   transform: translateX(-50%) translateY(0);
   border-bottom-color: var(--orb-accent);
+}
+:host([data-chat-spatial='1']) .composer {
+  left: var(--composer-x, 0px);
+  top: var(--composer-y, 0px);
+  width: var(--composer-w, 680px);
+  max-width: none;
+  transform: none;
+}
+:host([data-chat-spatial='1']) .composer:hover,
+:host([data-chat-spatial='1']) .composer:focus-within,
+:host([data-chat-spatial='1']) .composer[data-has-text='1'] {
+  transform: translateY(0);
 }
 .composer textarea {
   flex: 1 1 auto; min-width: 0; max-height: 96px; resize: none;
@@ -280,9 +325,44 @@ export class ChatLayer {
 
   /** 对话流与输入框的定位：球上方放对话流，球下方放输入框 */
   layout(streamTop: number, streamHeight: number, composerTop: number): void {
+    this.#clearSpatial();
     this.#stream.style.top = `${Math.round(streamTop)}px`;
     this.#stream.style.height = `${Math.max(0, Math.round(streamHeight))}px`;
     this.#composer.style.top = `${Math.round(composerTop)}px`;
+  }
+
+  /**
+   * 空间编排模式：SLO 直接给出对话列/字幕区的矩形。
+   * 这里不做任何"猜测位置"的计算，只应用结果。
+   */
+  layoutSpatial(chat: {
+    x: number; y: number; w: number; h: number;
+    composerX: number; composerY: number; composerW: number;
+    mode: 'center' | 'compact' | 'hidden';
+  }): void {
+    this.#host.dataset.chatSpatial = '1';
+    this.#host.dataset.chatMode = chat.mode;
+    this.#stream.style.left = `${Math.round(chat.x)}px`;
+    this.#stream.style.top = `${Math.round(chat.y)}px`;
+    this.#stream.style.width = `${Math.round(chat.w)}px`;
+    this.#stream.style.height = `${Math.max(0, Math.round(chat.h))}px`;
+    this.#stream.style.transform = 'none';
+    this.#stream.style.maxWidth = 'none';
+    this.#composer.style.left = `${Math.round(chat.composerX)}px`;
+    this.#composer.style.top = `${Math.round(chat.composerY)}px`;
+    this.#composer.style.width = `${Math.round(chat.composerW)}px`;
+    this.#composer.style.transform = 'none';
+    this.#composer.style.maxWidth = 'none';
+  }
+
+  #clearSpatial(): void {
+    delete this.#host.dataset.chatSpatial;
+    delete this.#host.dataset.chatMode;
+    const props = ['left', 'top', 'width', 'height', 'transform', 'max-width'];
+    for (const prop of props) {
+      this.#stream.style.removeProperty(prop);
+      this.#composer.style.removeProperty(prop);
+    }
   }
 
   focusInput(): void {

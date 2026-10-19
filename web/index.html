@@ -307,6 +307,14 @@
         <button class="tg" id="tgTheme">浅色</button>
       </div>
       <div class="row">
+        <label>空间工作区</label>
+        <button class="tg" id="tgSpatial">关</button>
+      </div>
+      <div class="row">
+        <label for="spatialMode">空间模式</label>
+        <select id="spatialMode" disabled></select>
+      </div>
+      <div class="row">
         <label>日志</label>
         <button class="tg" id="tgLog">开</button>
       </div>
@@ -316,7 +324,9 @@
       </div>
     </div>
 
-    <ai-orb-chat></ai-orb-chat>
+    <ai-orb-chat>
+      <ai-spatial-stage slot="stage"></ai-spatial-stage>
+    </ai-orb-chat>
 
     <script type="module" src="/src/app/index.ts"></script>
   </body>

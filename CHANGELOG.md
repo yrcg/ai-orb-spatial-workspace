@@ -4,6 +4,7 @@
 
 | BUILD | 内容 |
 |---|---|
+| **探索分支** | **AI 编排的空间工作区**（`feat/ai-spatial-workspace`，默认关闭）：新增 SceneSpec 场景协议、确定性 Spatial Layout Orchestrator、`<ai-spatial-stage>` 舞台、Renderer/Source 双注册表；球体支持让位/缩小/停靠左下，对话层支持分栏与底部字幕；六种空间形态（companion / split-left / split-right / stage / immersive / focus）可即时切换。视觉走"无边界漂浮"：无卡片底、无描边、mask 羽化，图表只强调单一峰值。**未合并主线**，回滚见 [docs/spatial-workspace.md](docs/spatial-workspace.md) |
 | **新前端** | **液态球界面重构**：悬浮球换成 liquid-orb（WebGPU），双击四段式激活编排（坍缩→核心→光迹→展开）、收起三段式；对话流/球/输入框自上而下；对话层无边框可自由滚动；界面背后粒子场；球随语音律动（聆听/回答/思考三态 + 待机呼吸 + 静默睡眠）；保留旧版启动音、新增挂断音与出错音；悬浮球渲染体做成可替换接口。旧版界面已移除 |
 | **新前端 .4** | **声场光晕改为原生**：去掉 32 段线条环，改用上游 `mfEdgeGlow` 的连续衰减光；光晕色由四段主色中饱和度最高的一支派生（预设导出的 glowColor 偏灰，画出来像雾）；新增 `auraMode` 三档开关 |
 | **新前端 .3** | **听感/观感收敛**：轮廓呼吸改为驱动上游原生形变参数（warp / ridgeAmt / contourDeform），不再缩放整颗球，形变与光照边缘天然同源；曝光加总闸（≤形态基准 1.15 倍），大声不再发白；输入框默认隐藏、悬停浮现；停靠球 168px → 120px，配色改用「思考中」种子派生 |
