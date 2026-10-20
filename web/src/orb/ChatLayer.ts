@@ -56,10 +56,6 @@ const STYLES = `
   text-shadow: 0 1px 12px rgba(var(--orb-scrim), 0.85);
 }
 /* 字幕模式下内容压在图表/3D 上，空场提示要能看清 */
-:host([data-chat-mode='compact']) .streamInner[data-empty='1'] .empty { color: var(--orb-text-dim); }
-/* 空间模式里环境本身就有内容，空场提示只会变成噪点 */
-:host([data-chat-spatial='1']) .empty { display: none; }
-:host([data-chat-mode='compact']) .streamInner[data-empty='1'] .empty,
 :host([data-chat-mode='compact']) .text { text-align: center; }
 :host([data-chat-mode='compact']) .msg { max-width: 100%; align-self: center; align-items: center; }
 /* 内层负责「贴底对齐」。滚动容器必须是个普通块，否则 justify-content:flex-end
@@ -107,20 +103,6 @@ const STYLES = `
 .tool-inline.fail .tspin { animation: none; border: none; width: auto; height: auto; }
 .tool-inline.fail .tspin::after { content: "✕"; font-weight: 700; }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* 空场提示：展开但还没说话时，给一句很轻的邀请，避免一片空白 */
-.empty {
-  flex: 0 0 auto;
-  align-self: center;
-  max-width: 80%;
-  padding: 6px 0 2px;
-  font-size: 12.5px;
-  line-height: 1.7;
-  letter-spacing: 0.04em;
-  color: var(--orb-text-faint);
-  text-align: center;
-  animation: rise 420ms ease both;
-}
 
 /* 思考指示：没有文字时也能看到「它在想」，三个呼吸点 */
 .thinking {
@@ -291,7 +273,6 @@ export class ChatLayer {
   #toolEls: Array<{ callId: string | null; el: HTMLElement; msg: ChatMessage }> = [];
   #thinkEl: HTMLElement | null = null;
   #listenEl: HTMLElement | null = null;
-  #emptyEl: HTMLElement | null = null;
   #thinking = false;
   #listening = false;
   #scrollTimer = 0;
@@ -408,7 +389,6 @@ export class ChatLayer {
     this.#toolEls = [];
     this.#thinkEl = null;
     this.#listenEl = null;
-    this.#emptyEl = null;
     this.#thinking = false;
     this.#listening = false;
     this.#liveEl = null;
@@ -503,7 +483,8 @@ export class ChatLayer {
     if (on === this.#thinking) return;
     this.#thinking = on;
     if (on) {
-      this.#hideEmpty();
+      // 不要清 data-empty：它就是「此刻只有状态指示、没有消息」的标记，
+      // 思考点/聆听波形要靠它居中。清掉会让三个点孤零零贴在左上角。
       if (!this.#thinkEl) {
         const el = document.createElement('div');
         el.className = 'thinking';
@@ -525,7 +506,7 @@ export class ChatLayer {
     if (on === this.#listening) return;
     this.#listening = on;
     if (on) {
-      this.#hideEmpty();
+      // 同 setThinking：保留 data-empty，让聆听波形居中而不是贴左
       if (!this.#listenEl) {
         const el = document.createElement('div');
         el.className = 'listening';
@@ -550,24 +531,18 @@ export class ChatLayer {
     else this.#inner.append(el);
   }
 
-  /** 空场提示：只在「没有任何消息」时出现 */
+  /**
+   * 空场标记：不再显示任何提示文字（2026-10-19 用户要求去掉）。
+   * 只保留 data-empty 这一个布尔标记——思考点和聆听波形需要靠它居中，
+   * 没有它的话「它在想」会贴在左边缘，看起来像一条错位的消息。
+   */
   #showEmpty(): void {
     if (this.#messages.length) return;
     this.#inner.dataset.empty = '1';
-    if (this.#emptyEl || this.#thinking || this.#listening) return;
-    const el = document.createElement('div');
-    el.className = 'empty';
-    el.textContent = '直接说话就行，也可以打字。';
-    this.#emptyEl = el;
-    if (this.#thinkEl) this.#inner.insertBefore(el, this.#thinkEl);
-    else this.#inner.append(el);
   }
 
   #hideEmpty(): void {
     this.#inner.dataset.empty = '0';
-    if (!this.#emptyEl) return;
-    this.#emptyEl.remove();
-    this.#emptyEl = null;
   }
 
   /** 强制回到底部并恢复跟随（每次展开时调用，避免历史残留位置） */

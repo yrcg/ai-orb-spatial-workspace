@@ -215,21 +215,6 @@ const STYLES = `
   pointer-events: none;
   will-change: opacity, transform;
 }
-.hint {
-  position: absolute;
-  z-index: 3;
-  right: var(--orb-dock-margin-x, 32px);
-  bottom: calc(var(--orb-dock-margin-y, 44px) - 24px);
-  width: var(--orb-dock-size, 168px);
-  text-align: center;
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  color: var(--orb-text-faint);
-  pointer-events: none;
-  user-select: none;
-  transition: opacity 400ms ease;
-}
-:host([data-phase='active']) .hint { opacity: 0; }
 .close-hint {
   position: absolute;
   z-index: 7;
@@ -283,7 +268,6 @@ const TEMPLATE = `
 <div class="close-hint" part="close" role="button" tabindex="0" aria-label="挂断并收起">
   <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
 </div>
-<div class="hint">双击唤起</div>
 <div class="unsupported" hidden>
   <b>当前浏览器不支持 WebGPU</b>
   液态球无法渲染，对话功能不受影响。<br />建议使用 Chrome / Edge 113+、Safari 26+ 或 Firefox 141+（Windows）。
